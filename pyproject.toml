@@ -1,0 +1,21 @@
+[project]
+name = "image-generator"
+version = "0.1.0"
+description = "CLI tool to generate images from prompts using hosted APIs"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "huggingface_hub>=0.24.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.6.0",
+    "Pillow>=10.4.0",
+    "google-genai>=1.0.0",
+    "openai>=1.0.0",
+    "typer>=0.12.0",
+]
+
+[project.scripts]
+image-generator = "image_generator.cli:app"
+
+[tool.uv]
+package = true
