@@ -204,6 +204,50 @@ def open_prompt_editor(prompt: str, editor_command: List[str]) -> Optional[str]:
             logger.warning("Unable to remove temp file: %s", temp_path)
 
 
+def open_prompt_editors(
+    prompts: List[str], editor_command: List[str]
+) -> List[Optional[str]]:
+    """Open one editor per prompt in parallel and return edited prompts."""
+    temp_paths: List[Path] = []
+    processes: List[subprocess.Popen[bytes] | subprocess.Popen[str]] = []
+
+    try:
+        for prompt in prompts:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                suffix=".txt",
+                delete=False,
+            ) as handle:
+                handle.write(prompt)
+                temp_path = Path(handle.name)
+            temp_paths.append(temp_path)
+
+            logger.info("Opening editor for prompt: %s", temp_path)
+            process = subprocess.Popen([*editor_command, str(temp_path)])
+            processes.append(process)
+
+        for process in processes:
+            return_code = process.wait()
+            if return_code != 0:
+                raise subprocess.CalledProcessError(return_code, process.args)
+
+        edited_prompts: List[Optional[str]] = []
+        for temp_path in temp_paths:
+            edited = read_prompts(temp_path)
+            if not edited:
+                edited_prompts.append(None)
+                continue
+            edited_prompts.append(edited[0])
+        return edited_prompts
+    finally:
+        for temp_path in temp_paths:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Unable to remove temp file: %s", temp_path)
+
+
 def open_image(path: Path) -> None:
     """Open the image file in the default viewer."""
     try:
@@ -403,14 +447,20 @@ def batch_generate(
         if not edited_prompts:
             continue
 
-        for prompt_index, prompt in enumerate(edited_prompts, start=1):
-            current_prompt = prompt
-            while True:
+        pending_prompts: List[tuple[int, str]] = [
+            (prompt_index, prompt)
+            for prompt_index, prompt in enumerate(edited_prompts, start=1)
+        ]
+
+        while pending_prompts:
+            for prompt_index, current_prompt in pending_prompts:
                 output_path = unique_output_path(
                     resolved_output_dir, current_prompt, used_names
                 )
                 cmd = build_cli_args(generate_config, output_path, current_prompt)
-                effective_provider, effective_model = resolve_provider_model(generate_config)
+                effective_provider, effective_model = resolve_provider_model(
+                    generate_config
+                )
                 run_with_retries(cmd, retry_config)
                 meta_entry = ImageMetadata(
                     ts=datetime.now(timezone.utc),
@@ -436,13 +486,24 @@ def batch_generate(
                 if show_image:
                     open_image(output_path)
 
-                edited_prompt = open_prompt_editor(current_prompt, editor_cmd)
+            edited_round = open_prompt_editors(
+                [prompt for _, prompt in pending_prompts],
+                editor_cmd,
+            )
+
+            next_round: List[tuple[int, str]] = []
+            for (prompt_index, current_prompt), edited_prompt in zip(
+                pending_prompts,
+                edited_round,
+            ):
                 if not edited_prompt:
-                    logger.info("Prompt cleared; keeping last result.")
-                    break
+                    logger.info("Prompt %s cleared; keeping last result.", prompt_index)
+                    continue
                 if edited_prompt.strip() == current_prompt.strip():
-                    break
-                current_prompt = edited_prompt
+                    continue
+                next_round.append((prompt_index, edited_prompt))
+
+            pending_prompts = next_round
 
 
 if __name__ == "__main__":
