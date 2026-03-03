@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -350,6 +351,18 @@ def run_with_retries(
         time.sleep(sleep_s)
 
 
+def generate_prompt_image(
+    command: List[str],
+    retry_config: RetryConfig,
+    prompt_index: int,
+    prompt: str,
+    output_path: Path,
+) -> tuple[int, str, Path]:
+    """Generate one image with retries and return generation details."""
+    run_with_retries(command, retry_config)
+    return prompt_index, prompt, output_path
+
+
 def write_metadata(metadata_path: Path, metadata: ImageMetadata) -> None:
     """Append metadata to a jsonl file."""
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
@@ -435,6 +448,7 @@ def batch_generate(
         max_sleep=max_sleep,
         per_request_sleep=per_request_sleep,
     )
+    effective_provider, effective_model = resolve_provider_model(generate_config)
 
     prompts = read_prompts(prompts_file)
     if not prompts:
@@ -453,38 +467,52 @@ def batch_generate(
         ]
 
         while pending_prompts:
+            jobs: List[tuple[int, str, Path, List[str]]] = []
             for prompt_index, current_prompt in pending_prompts:
                 output_path = unique_output_path(
                     resolved_output_dir, current_prompt, used_names
                 )
                 cmd = build_cli_args(generate_config, output_path, current_prompt)
-                effective_provider, effective_model = resolve_provider_model(
-                    generate_config
-                )
-                run_with_retries(cmd, retry_config)
-                meta_entry = ImageMetadata(
-                    ts=datetime.now(timezone.utc),
-                    level="info",
-                    event="generate.success",
-                    message="image generated",
-                    service="image-generator",
-                    version=version,
-                    env=settings.env,
-                    run_id=run_id,
-                    request_id=str(uuid.uuid4()),
-                    provider=effective_provider,
-                    model=effective_model,
-                    prompt=current_prompt,
-                    output_path=output_path,
-                    file_name=output_path.name,
-                    batch_index=batch_index,
-                    prompt_index=prompt_index,
-                )
-                write_metadata(resolved_metadata, meta_entry)
-                logger.info("Wrote metadata for %s", output_path.name)
+                jobs.append((prompt_index, current_prompt, output_path, cmd))
 
-                if show_image:
-                    open_image(output_path)
+            with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+                future_to_job = {
+                    executor.submit(
+                        generate_prompt_image,
+                        cmd,
+                        retry_config,
+                        prompt_index,
+                        current_prompt,
+                        output_path,
+                    ): (prompt_index, current_prompt, output_path)
+                    for prompt_index, current_prompt, output_path, cmd in jobs
+                }
+
+                for future in as_completed(future_to_job):
+                    prompt_index, current_prompt, output_path = future.result()
+                    meta_entry = ImageMetadata(
+                        ts=datetime.now(timezone.utc),
+                        level="info",
+                        event="generate.success",
+                        message="image generated",
+                        service="image-generator",
+                        version=version,
+                        env=settings.env,
+                        run_id=run_id,
+                        request_id=str(uuid.uuid4()),
+                        provider=effective_provider,
+                        model=effective_model,
+                        prompt=current_prompt,
+                        output_path=output_path,
+                        file_name=output_path.name,
+                        batch_index=batch_index,
+                        prompt_index=prompt_index,
+                    )
+                    write_metadata(resolved_metadata, meta_entry)
+                    logger.info("Wrote metadata for %s", output_path.name)
+
+                    if show_image:
+                        open_image(output_path)
 
             edited_round = open_prompt_editors(
                 [prompt for _, prompt in pending_prompts],
