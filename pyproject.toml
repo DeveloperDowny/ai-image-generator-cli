@@ -19,3 +19,6 @@ image-generator = "image_generator.cli:app"
 
 [tool.uv]
 package = true
+
+[tool.setuptools]
+packages = { find = { exclude = ["inputs", "scripts", "outputs", "archive"] } }

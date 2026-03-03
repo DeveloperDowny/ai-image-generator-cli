@@ -10,6 +10,15 @@ from typing import Optional
 import typer
 from pydantic import ValidationError
 
+from image_generator.defaults import (
+    DEFAULT_HF_PROVIDER,
+    DEFAULT_MODEL_GOOGLE,
+    DEFAULT_MODEL_HF,
+    DEFAULT_MODEL_OPENAI,
+    DEFAULT_PROVIDER,
+    DEFAULT_QUALITY,
+    DEFAULT_SIZE,
+)
 from image_generator.models import GenerateRequest, GenerateResult
 from image_generator.providers.google import GoogleProvider
 from image_generator.providers.hf import HuggingFaceProvider
@@ -17,14 +26,6 @@ from image_generator.providers.openai import OpenAIProvider
 from image_generator.settings import Settings
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MODEL_OPENAI = "gpt-image-1-mini"
-DEFAULT_MODEL_HF = "black-forest-labs/FLUX.1-dev"
-DEFAULT_MODEL_GOOGLE = "gemini-2.5-flash-image"
-DEFAULT_PROVIDER = "google"
-DEFAULT_HF_PROVIDER = "auto"
-DEFAULT_SIZE = "1024x1024"
-DEFAULT_QUALITY = "high"
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
